@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, useTemplateRef } from 'vue'
+import { computed, onMounted, shallowRef } from 'vue'
 import { AlertCircle } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -9,8 +9,13 @@ import MapInspector from './MapInspector.vue'
 import MapBottomBar from './MapBottomBar.vue'
 import { useMapWorkspace } from './useMapWorkspace'
 
-const workspaceElement = useTemplateRef<HTMLElement>('workspace')
-const mapElement = useTemplateRef<HTMLDivElement>('map')
+const workspaceElement = shallowRef<HTMLElement | null>(null)
+const mapElement = shallowRef<HTMLDivElement | null>(null)
+onMounted(() => {
+  const workspace = document.querySelector<HTMLElement>('[data-map-workspace]')
+  workspaceElement.value = workspace
+  mapElement.value = workspace?.querySelector<HTMLDivElement>('[data-map-canvas]') ?? null
+})
 const workspace = useMapWorkspace(mapElement)
 const drawingDialogOpen = computed({
   get: () => workspace.selectedDrawing.value !== null,
@@ -30,8 +35,8 @@ function deleteViewedDrawing() {
 </script>
 
 <template>
-  <main ref="workspace" class="map-workspace">
-    <div ref="map" class="map-canvas" aria-label="杭州高德地图" />
+  <main data-map-workspace class="map-workspace">
+    <div data-map-canvas class="map-canvas" aria-label="杭州高德地图" />
     <div class="map-tone" aria-hidden="true" />
 
     <TopNavigation class="top-navigation" />
