@@ -4,6 +4,7 @@ import { CheckCircle2, ClipboardCopy, Download, FileCheck2, FileOutput } from '@
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
+import { getCoordinateSystemLabel } from '@/features/coordinate/coordinateSystems'
 import type { ConversionResult, ProjectionCode } from './convertData'
 
 const props = defineProps<{
@@ -11,11 +12,11 @@ const props = defineProps<{
   resultName: string
   targetProjection: ProjectionCode
 }>()
-const emit = defineEmits<{ copy: []; download: [] }>()
+const emit = defineEmits<{ copy: []; download: []; loadToMap: [] }>()
 
 const extentLabel = computed(() => {
   if (!props.result?.extent) return '—'
-  const digits = props.targetProjection === 'EPSG:4326' ? 5 : 1
+  const digits = ['EPSG:4326', 'EPSG:4490', 'GCJ-02', 'BD-09'].includes(props.targetProjection) ? 5 : 1
   const [minX, minY, maxX, maxY] = props.result.extent
   return `${minX.toFixed(digits)}, ${minY.toFixed(digits)}  →  ${maxX.toFixed(digits)}, ${maxY.toFixed(digits)}`
 })
@@ -36,11 +37,12 @@ const extentLabel = computed(() => {
           <div><span>要素数量</span><strong>{{ result.featureCount }}</strong></div>
           <div><span>几何类型</span><strong>{{ result.geometryTypes.join('、') || '未知' }}</strong></div>
         </div>
-        <div class="extent-block"><span>坐标范围 · {{ targetProjection }}</span><strong>{{ extentLabel }}</strong></div>
+        <div class="extent-block"><span>坐标范围 · {{ getCoordinateSystemLabel(targetProjection) }}</span><strong>{{ extentLabel }}</strong></div>
         <div class="output-heading"><span>输出预览</span><small>{{ resultName }}</small></div>
         <Textarea class="output-editor" :model-value="result.output" readonly spellcheck="false" aria-label="转换结果预览" />
         <div class="result-actions">
           <Button variant="outline" size="sm" @click="emit('copy')"><ClipboardCopy :size="15" /> 复制结果</Button>
+          <Button variant="outline" size="sm" @click="emit('loadToMap')">加载到地图</Button>
           <Button size="sm" @click="emit('download')"><Download :size="15" /> 下载文件</Button>
         </div>
       </template>

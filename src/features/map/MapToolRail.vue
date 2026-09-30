@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Layers3, PencilLine, Ruler } from '@lucide/vue'
+import { FileUp, Layers3, MapPin, PencilLine, Ruler } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import type { MapTool } from '@/stores/mapWorkspace'
@@ -9,7 +9,9 @@ const emit = defineEmits<{ select: [tool: MapTool] }>()
 
 const tools = [
   { id: 'layers', label: '图层', icon: Layers3 },
+  { id: 'import', label: '导入', icon: FileUp },
   { id: 'draw', label: '绘制', icon: PencilLine },
+  { id: 'annotations', label: '标注', icon: MapPin },
   { id: 'measure', label: '测量', icon: Ruler },
 ] as const
 </script>

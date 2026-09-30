@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import TopNavigation from '@/components/navigation/TopNavigation.vue'
+import CoordinateSystemPicker from '@/features/coordinate/CoordinateSystemPicker.vue'
 import { transformCoordinate } from '@/features/coordinate/projection'
 
 type SourceMode = 'text' | 'table' | 'geojson'
@@ -50,27 +51,6 @@ const successMessage = ref('')
 const outputBlob = ref<Blob | null>(null)
 const outputFilename = ref('')
 const filePickerKey = ref(0)
-
-const crsOptions = [
-  { value: 'EPSG:4326', label: 'EPSG:4326 · WGS 84 经纬度' },
-  { value: 'EPSG:4490', label: 'EPSG:4490 · CGCS2000 经纬度' },
-  { value: 'GCJ-02', label: 'GCJ-02 · 国测局 / 高德坐标' },
-  { value: 'BD-09', label: 'BD-09 · 百度坐标' },
-  { value: 'EPSG:3857', label: 'EPSG:3857 · Web Mercator' },
-  { value: 'EPSG:32651', label: 'EPSG:32651 · WGS 84 / UTM 51N' },
-  { value: 'EPSG:32650', label: 'EPSG:32650 · WGS 84 / UTM 50N' },
-  { value: 'EPSG:32652', label: 'EPSG:32652 · WGS 84 / UTM 52N' },
-  { value: 'EPSG:32751', label: 'EPSG:32751 · WGS 84 / UTM 51S' },
-  { value: 'EPSG:4269', label: 'EPSG:4269 · NAD83 经纬度' },
-  { value: 'EPSG:4258', label: 'EPSG:4258 · ETRS89 经纬度' },
-  { value: 'EPSG:4267', label: 'EPSG:4267 · NAD27 经纬度' },
-  { value: 'EPSG:3413', label: 'EPSG:3413 · 北极立体投影' },
-  { value: 'EPSG:3031', label: 'EPSG:3031 · 南极立体投影' },
-  { value: 'EPSG:3395', label: 'EPSG:3395 · World Mercator' },
-  { value: 'EPSG:27700', label: 'EPSG:27700 · British National Grid' },
-  { value: 'EPSG:2154', label: 'EPSG:2154 · Lambert-93' },
-  { value: 'CUSTOM', label: '自定义 EPSG / PROJ 字符串' },
-]
 
 const headers = computed(() => fileMatrix.value[0]?.map((value, index) => String(value ?? '').trim() || `字段 ${index + 1}`) ?? [])
 const previewMatrix = computed(() => convertedMatrix.value.length ? convertedMatrix.value : fileMatrix.value)
@@ -368,6 +348,15 @@ function clearInput() {
   successMessage.value = ''
 }
 
+function swapCoordinateSystems() {
+  const previousInput = inputCrs.value
+  inputCrs.value = outputCrs.value
+  outputCrs.value = previousInput
+  const previousCustom = customInputCrs.value
+  customInputCrs.value = customOutputCrs.value
+  customOutputCrs.value = previousCustom
+}
+
 function switchSourceMode(mode: SourceMode) {
   sourceMode.value = mode
   clearInput()
@@ -459,28 +448,12 @@ function switchSourceMode(mode: SourceMode) {
             </div>
 
             <div class="crs-pair">
-              <div class="form-field">
-                <Label for="input-crs">源坐标系</Label>
-                <Select v-model="inputCrs">
-                  <SelectTrigger id="input-crs"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem v-for="option in crsOptions" :key="`in-${option.value}`" :value="option.value">{{ option.label }}</SelectItem></SelectContent>
-                </Select>
-                <Input v-if="inputCrs === 'CUSTOM'" v-model="customInputCrs" class="custom-crs" placeholder="EPSG 或 PROJ 字符串" />
-              </div>
-
-              <div class="direction-icon"><ArrowLeftRight :size="16" /></div>
-
-              <div class="form-field">
-                <Label for="output-crs">目标坐标系</Label>
-                <Select v-model="outputCrs">
-                  <SelectTrigger id="output-crs"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem v-for="option in crsOptions" :key="`out-${option.value}`" :value="option.value">{{ option.label }}</SelectItem></SelectContent>
-                </Select>
-                <Input v-if="outputCrs === 'CUSTOM'" v-model="customOutputCrs" class="custom-crs" placeholder="EPSG 或 PROJ 字符串" />
-              </div>
+              <CoordinateSystemPicker v-model="inputCrs" v-model:custom-definition="customInputCrs" label="源坐标系" id="input-crs" />
+              <Button type="button" variant="outline" class="direction-icon" aria-label="交换源坐标系和目标坐标系" @click="swapCoordinateSystems"><ArrowLeftRight :size="15" /><span>交换方向</span></Button>
+              <CoordinateSystemPicker v-model="outputCrs" v-model:custom-definition="customOutputCrs" label="目标坐标系" id="output-crs" />
             </div>
 
-            <div class="supported-crs">内置常用 EPSG · 全部 WGS84 UTM 分区 · 支持自定义 PROJ 字符串</div>
+            <div class="supported-crs">地理坐标系及 Web Mercator、UTM、高斯-克吕格 3°/6°带；可输入 EPSG 或自定义 PROJ 字符串。</div>
 
             <Button class="convert-button" @click="convert"><RefreshCw :size="15" />开始转换</Button>
           </CardContent>
@@ -576,10 +549,10 @@ function switchSourceMode(mode: SourceMode) {
 .form-field :deep([data-slot="select-trigger"]) { width: 100%; height: 34px; padding-inline: 9px; font-size: 11px; }
 .form-field :deep(input) { height: 34px; font-size: 11px; }
 .field-note-wide { grid-column: 1 / -1; }
-.crs-pair { display: grid; grid-template-columns: minmax(0, 1fr) 27px minmax(0, 1fr); align-items: start; gap: 7px; }
-.direction-icon { display: grid; width: 27px; height: 27px; margin-top: 33px; place-items: center; border: 1px solid #e3e6e2; border-radius: 8px; background: #fff; color: #68716a; }
+.crs-pair { display:grid; grid-template-columns:minmax(0,1fr); gap:10px; }
+.direction-icon { display:flex; width:max-content; min-height:31px; align-items:center; justify-self:center; gap:6px; padding:0 10px; border-color:#e2e6e1; background:#fafbf9; color:#69736b; font-size:10px; }
+.crs-pair :deep(.crs-trigger) { height:43px; }
 .supported-crs { color: #909791; font-size: 10px; line-height: 1.45; }
-.custom-crs { margin-top: 2px; }
 .convert-button { width: 100%; height: 36px; margin-top: 1px; font-size: 12px; }
 .output-panel { display: flex; flex-direction: column; }
 .output-content { flex: 1; min-height: 0; }

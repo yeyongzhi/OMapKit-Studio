@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, shallowRef } from 'vue'
-import { Camera, Check, Copy, LocateFixed, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, X } from '@lucide/vue'
+import { BookmarkPlus, Camera, Check, Copy, House, LocateFixed, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, Trash2, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import type { SavedMapView } from '@/stores/mapWorkspace'
 
 const props = defineProps<{
   panelOpen: boolean
   fullscreen: boolean
   zoom: number
   center: [number, number]
+  savedViews: SavedMapView[]
 }>()
 
 const emit = defineEmits<{
@@ -18,11 +20,17 @@ const emit = defineEmits<{
   screenshot: []
   toggleFullscreen: []
   togglePanel: []
+  resetView: []
+  saveView: [name: string]
+  openView: [id: string]
+  deleteView: [id: string]
 }>()
 
 const now = shallowRef(new Date())
 const showLocation = shallowRef(false)
+const showSavedViews = shallowRef(false)
 const copiedCenter = shallowRef(false)
+const savedViewName = shallowRef('')
 const longitude = shallowRef('')
 const latitude = shallowRef('')
 const inputError = shallowRef('')
@@ -50,11 +58,25 @@ async function copyCenter() {
 
 function openLocation() {
   showLocation.value = !showLocation.value
+  showSavedViews.value = false
   if (showLocation.value) {
     longitude.value = props.center[0].toFixed(6)
     latitude.value = props.center[1].toFixed(6)
     inputError.value = ''
   }
+}
+
+function toggleSavedViews() {
+  showSavedViews.value = !showSavedViews.value
+  showLocation.value = false
+  if (showSavedViews.value) savedViewName.value = `视图 ${props.savedViews.length + 1}`
+}
+
+function submitSavedView() {
+  const name = savedViewName.value.trim()
+  if (!name) return
+  emit('saveView', name)
+  showSavedViews.value = false
 }
 
 function submitLocation() {
@@ -92,6 +114,28 @@ onBeforeUnmount(() => {
       </Button>
     </div>
     <div class="toolbar-actions">
+      <Button type="button" variant="ghost" size="icon" class="action-button" title="回到默认视图" aria-label="回到默认视图" @click="emit('resetView')"><House :size="18" /></Button>
+      <div class="views-anchor">
+        <Button type="button" variant="ghost" size="icon" class="action-button" title="视图收藏" aria-label="视图收藏" :aria-expanded="showSavedViews" @click="toggleSavedViews"><BookmarkPlus :size="18" /></Button>
+        <div v-if="showSavedViews" class="views-popover">
+          <div class="popover-heading"><strong>视图收藏</strong><Button type="button" variant="ghost" size="icon" aria-label="关闭视图收藏" @click="showSavedViews = false"><X :size="16" /></Button></div>
+          <form class="save-view-form" @submit.prevent="submitSavedView">
+            <Input v-model="savedViewName" aria-label="视图名称" placeholder="输入视图名称" maxlength="40" />
+            <Button type="submit" size="sm" :disabled="!savedViewName.trim()">保存</Button>
+          </form>
+          <div v-if="savedViews.length" class="saved-view-list">
+            <div v-for="view in savedViews" :key="view.id" class="saved-view-row">
+              <Button type="button" variant="ghost" class="saved-view-open" @click="emit('openView', view.id); showSavedViews = false">
+                <strong>{{ view.name }}</strong>
+                <small>{{ view.center[0].toFixed(4) }}, {{ view.center[1].toFixed(4) }} · 缩放 {{ view.zoom.toFixed(1) }}</small>
+              </Button>
+              <Button type="button" variant="ghost" size="icon" class="saved-view-delete" :aria-label="`删除${view.name}`" title="删除收藏" @click="emit('deleteView', view.id)"><Trash2 :size="14" /></Button>
+            </div>
+          </div>
+          <div v-else class="views-empty">还没有收藏的地图视图。</div>
+        </div>
+      </div>
+      <span class="toolbar-divider" />
       <div class="location-anchor">
         <Button type="button" variant="ghost" size="icon" class="action-button" title="经纬度定位" aria-label="经纬度定位" :aria-expanded="showLocation" @click="openLocation"><LocateFixed :size="19" /></Button>
         <div v-if="showLocation" class="location-popover">
@@ -129,6 +173,17 @@ onBeforeUnmount(() => {
 .action-button { width:34px; height:34px; color:#666666; transition:background .18s,color .18s; }
 .action-button:hover,.action-button:focus-visible { background:#ededed; color:#595959; outline:none; }
 .toolbar-divider { width:1px; height:21px; margin:0 5px; background:#e0e0e0; }
+.views-anchor { position:relative; }
+.views-popover { position:absolute; right:-28px; bottom:calc(100% + 17px); width:320px; max-height:min(430px,70vh); padding:15px; overflow:auto; border:1px solid #e7e7e7; border-radius:15px; background:rgba(252,253,251,.98); box-shadow:0 15px 55px rgba(43,43,43,.2); backdrop-filter:blur(22px); }
+.save-view-form { display:flex; gap:7px; margin:12px 0 10px; }
+.save-view-form input { min-width:0; height:33px; font-size:11px; }
+.saved-view-list { display:flex; flex-direction:column; gap:5px; max-height:245px; overflow:auto; }
+.saved-view-row { display:flex; align-items:center; gap:4px; padding:3px; border:1px solid #e9e9e9; border-radius:9px; background:rgba(255,255,255,.72); }
+.saved-view-open { display:flex; flex:1; flex-direction:column; align-items:flex-start; justify-content:center; min-width:0; height:auto; gap:4px; padding:7px; text-align:left; }
+.saved-view-open strong { max-width:100%; overflow:hidden; color:#4e4e4e; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.saved-view-open small { max-width:100%; overflow:hidden; color:#979797; font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+.saved-view-delete { width:28px; height:28px; flex:none; color:#ae716a; }
+.views-empty { padding:14px 8px; color:#999; font-size:10px; text-align:center; }
 .location-anchor { position:relative; }
 .location-popover { position:absolute; right:-20px; bottom:calc(100% + 17px); width:290px; padding:17px; border:1px solid #e7e7e7; border-radius:16px; background:rgba(252,253,251,.97); box-shadow:0 15px 55px rgba(43, 43, 43,.2); backdrop-filter:blur(22px); }
 .popover-heading { display:flex; justify-content:space-between; align-items:center; font-size:14px; }
@@ -140,5 +195,5 @@ onBeforeUnmount(() => {
 .coordinate-fields input { min-width:0; font-size:11px; }
 .input-error { display:block; margin:-4px 0 10px; color:#b04942; font-size:10px; }
 @media (max-width:700px) { .bottom-bar { min-height:46px; gap:6px; padding:4px 13px max(4px,env(safe-area-inset-bottom)); } .date-area { min-width:0; gap:6px; } .date-copy strong { font-size:11px; } .date-copy small { font-size:8px; } .center-readout { gap:4px; font-size:9px; } .center-readout strong { font-size:9px; } .coordinate-label,.zoom-readout,.readout-divider { display:none; } .copy-coordinate { width:24px; height:24px; } .action-button { width:32px; height:32px; } }
-@media (max-width:400px) { .bottom-bar { padding-right:7px; padding-left:7px; } .date-copy small { display:none; } .date-copy strong { font-size:10px; } .toolbar-actions { gap:0; } .toolbar-divider { margin:0 2px; } .action-button { width:27px; } .center-readout { gap:2px; } .center-readout strong { font-size:8px; } .location-popover { right:-140px; width:min(290px,calc(100vw - 28px)); } }
+@media (max-width:400px) { .bottom-bar { padding-right:7px; padding-left:7px; } .date-copy small { display:none; } .date-copy strong { font-size:10px; } .toolbar-actions { gap:0; } .toolbar-divider { margin:0 2px; } .action-button { width:27px; } .center-readout { gap:2px; } .center-readout strong { font-size:8px; } .location-popover { right:-140px; width:min(290px,calc(100vw - 28px)); } .views-popover { right:-64px; width:min(320px,calc(100vw - 24px)); } }
 </style>

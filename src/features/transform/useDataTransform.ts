@@ -17,6 +17,8 @@ export function useDataTransform() {
   const targetFormat = shallowRef<DataFormat>('WKT')
   const sourceProjection = shallowRef<ProjectionCode>('EPSG:4326')
   const targetProjection = shallowRef<ProjectionCode>('EPSG:4326')
+  const sourceCustomProjection = shallowRef('')
+  const targetCustomProjection = shallowRef('')
   const fileName = shallowRef('')
   const result = shallowRef<ConversionResult | null>(null)
   const error = shallowRef('')
@@ -41,7 +43,7 @@ export function useDataTransform() {
     if (format === 'KML') targetProjection.value = 'EPSG:4326'
     result.value = null
   })
-  watch([sourceText, sourceProjection, targetProjection], () => { result.value = null })
+  watch([sourceText, sourceProjection, targetProjection, sourceCustomProjection, targetCustomProjection], () => { result.value = null })
 
   async function readFile(file: File) {
     error.value = ''
@@ -97,6 +99,8 @@ export function useDataTransform() {
         targetFormat: targetFormat.value,
         sourceProjection: sourceProjection.value,
         targetProjection: targetProjection.value,
+        sourceCustomProjection: sourceCustomProjection.value,
+        targetCustomProjection: targetCustomProjection.value,
       })
       message.value = `转换完成，共 ${result.value.featureCount} 个要素。`
     } catch (caught) {
@@ -135,6 +139,8 @@ export function useDataTransform() {
     targetFormat,
     sourceProjection,
     targetProjection,
+    sourceCustomProjection,
+    targetCustomProjection,
     fileName,
     sourceSize,
     canConvert,

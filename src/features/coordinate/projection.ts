@@ -47,6 +47,12 @@ function epsgDefinition(code: number): string | undefined {
 export function resolveProjection(value: CoordinateSystem, customDefinition = ''): string {
   const normalized = value.trim().toUpperCase()
   if (normalized === 'GCJ-02' || normalized === 'BD-09') return normalized
+  const gaussKrugerMatch = normalized.match(/^CGCS2000_GK_([36])_(\d{2,3})$/)
+  if (gaussKrugerMatch) {
+    const definition = `+proj=tmerc +lat_0=0 +lon_0=${Number(gaussKrugerMatch[2])} +k=1 +x_0=500000 +y_0=0 +ellps=GRS80 +units=m +no_defs +type=crs`
+    proj4.defs(normalized, definition)
+    return normalized
+  }
   const custom = customDefinition.trim()
   const definitionInput = normalized === 'CUSTOM' ? custom : normalized
   if (definitionInput.startsWith('+')) return definitionInput
@@ -96,4 +102,44 @@ export function transformCoordinate(
   const targetProjection = resolveProjection(target, targetCustom)
   const wgsCoordinate = intoWgs84([x, y], sourceProjection)
   return outOfWgs84(wgsCoordinate, targetProjection)
+}
+
+export function transformGeoJsonCoordinates(
+  value: Record<string, unknown>,
+  source: CoordinateSystem,
+  target: CoordinateSystem,
+  sourceCustom = '',
+  targetCustom = '',
+): Record<string, unknown> {
+  const result = structuredClone(value)
+
+  function transformPositions(positions: unknown): unknown {
+    if (!Array.isArray(positions)) return positions
+    if (positions.length >= 2 && typeof positions[0] === 'number' && typeof positions[1] === 'number') {
+      const [x, y] = transformCoordinate(positions[0], positions[1], source, target, sourceCustom, targetCustom)
+      return [x, y, ...positions.slice(2)]
+    }
+    return positions.map(transformPositions)
+  }
+
+  function visitGeometry(geometry: unknown) {
+    if (!geometry || typeof geometry !== 'object') return
+    const candidate = geometry as Record<string, unknown>
+    if (candidate.type === 'GeometryCollection' && Array.isArray(candidate.geometries)) {
+      candidate.geometries.forEach(visitGeometry)
+    } else if ('coordinates' in candidate) {
+      candidate.coordinates = transformPositions(candidate.coordinates)
+    }
+  }
+
+  if (result.type === 'FeatureCollection' && Array.isArray(result.features)) {
+    for (const feature of result.features) {
+      if (feature && typeof feature === 'object') visitGeometry((feature as Record<string, unknown>).geometry)
+    }
+  } else if (result.type === 'Feature') {
+    visitGeometry(result.geometry)
+  } else {
+    visitGeometry(result)
+  }
+  return result
 }

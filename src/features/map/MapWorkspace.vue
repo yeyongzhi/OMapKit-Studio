@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, shallowRef } from 'vue'
-import { AlertCircle } from '@lucide/vue'
+import { AlertCircle, ClipboardCopy, ZoomIn } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import TopNavigation from '@/components/navigation/TopNavigation.vue'
@@ -17,21 +17,15 @@ onMounted(() => {
   mapElement.value = workspace?.querySelector<HTMLDivElement>('[data-map-canvas]') ?? null
 })
 const workspace = useMapWorkspace(mapElement)
-const drawingDialogOpen = computed({
-  get: () => workspace.selectedDrawing.value !== null,
-  set: (open: boolean) => { if (!open) workspace.selectedDrawing.value = null },
+const featureDialogOpen = computed({
+  get: () => workspace.featurePopup.value !== null,
+  set: (open: boolean) => { if (!open) workspace.featurePopup.value = null },
 })
 
 function handleFullscreen() {
   if (workspaceElement.value) void workspace.toggleFullscreen(workspaceElement.value)
 }
 
-function deleteViewedDrawing() {
-  const id = workspace.selectedDrawing.value?.id
-  if (!id) return
-  workspace.deleteDrawing(id)
-  drawingDialogOpen.value = false
-}
 </script>
 
 <template>
@@ -52,15 +46,25 @@ function deleteViewedDrawing() {
       :drawing-count="workspace.drawingCount.value"
       :drawing-enabled="workspace.drawingEnabled.value"
       :drawing-items="workspace.drawingItems.value"
+      :annotations="workspace.store.annotations"
+      :map-ready="workspace.ready.value"
+      :annotation-pick-mode="workspace.annotationPickMode.value"
+      :picked-annotation-coordinate="workspace.pickedAnnotationCoordinate.value"
       :selected-drawing-ids="workspace.selectedDrawingIds.value"
       :measure-result="workspace.measureResult.value"
-      :base-visible="workspace.store.baseVisible"
-      :drawings-visible="workspace.store.drawingsVisible"
+      :layers="workspace.layerItems.value"
+      :import-busy="workspace.importBusy.value"
+      :import-reports="workspace.importReports.value"
       @close="workspace.store.panelOpen = false"
       @select-drawing-mode="workspace.selectDrawingMode"
       @select-measuring-mode="workspace.selectMeasuringMode"
-      @set-base-visible="workspace.setBaseVisible"
-      @set-drawings-visible="workspace.setDrawingsVisible"
+      @set-layer-visible="workspace.setLayerVisible"
+      @set-layer-opacity="workspace.setLayerOpacity"
+      @zoom-to-layer="workspace.zoomToLayer"
+      @rename-layer="workspace.renameLayer"
+      @move-layer="workspace.moveLayer"
+      @remove-layer="workspace.removeLayer"
+      @import-files="workspace.importFiles"
       @finish="workspace.finishCurrent"
       @cancel="workspace.cancelCurrent"
       @clear-drawings="workspace.clearDrawings"
@@ -73,6 +77,11 @@ function deleteViewedDrawing() {
       @select-all-drawings="workspace.selectAllDrawings"
       @delete-drawing="workspace.deleteDrawing"
       @delete-selected-drawings="workspace.deleteDrawings(workspace.selectedDrawingIds.value)"
+      @save-annotation="workspace.saveAnnotation"
+      @delete-annotation="workspace.deleteAnnotation"
+      @zoom-to-annotation="workspace.zoomToAnnotation"
+      @start-map-pick="workspace.startAnnotationPick"
+      @cancel-map-pick="workspace.cancelAnnotationPick"
     />
 
     <MapBottomBar
@@ -81,20 +90,42 @@ function deleteViewedDrawing() {
       :fullscreen="workspace.fullscreen.value"
       :zoom="workspace.zoomLevel.value"
       :center="workspace.store.center"
+      :saved-views="workspace.store.savedViews"
       @locate="workspace.locate"
       @screenshot="workspace.screenshot"
       @toggle-fullscreen="handleFullscreen"
       @toggle-panel="workspace.store.panelOpen = !workspace.store.panelOpen"
+      @reset-view="workspace.resetView"
+      @save-view="workspace.saveView"
+      @open-view="workspace.openSavedView"
+      @delete-view="workspace.deleteSavedView"
     />
 
-    <Dialog v-model:open="drawingDialogOpen">
-      <DialogContent v-if="workspace.selectedDrawing.value" class="feature-dialog">
+    <Dialog v-model:open="featureDialogOpen">
+      <DialogContent v-if="workspace.featurePopup.value" class="feature-dialog">
         <DialogHeader>
-          <DialogTitle>{{ workspace.selectedDrawing.value.label }}</DialogTitle>
-          <DialogDescription>{{ workspace.selectedDrawing.value.type }} · {{ workspace.selectedDrawing.value.coordinate }} · EPSG:4326</DialogDescription>
+          <DialogTitle>{{ workspace.featurePopup.value.geometryType }}</DialogTitle>
+          <DialogDescription>{{ workspace.featurePopup.value.layerName }} · {{ workspace.featurePopup.value.coordinate }} · EPSG:4326</DialogDescription>
         </DialogHeader>
-        <pre class="feature-json">{{ workspace.selectedDrawing.value.geoJson }}</pre>
-        <Button variant="destructive" @click="deleteViewedDrawing">删除此要素</Button>
+        <div v-if="workspace.featurePopup.value.properties.length" class="feature-properties">
+          <div v-for="property in workspace.featurePopup.value.properties" :key="property.name" class="feature-property">
+            <strong>{{ property.name }}</strong>
+            <details v-if="property.isComplex" class="feature-property-complex">
+              <summary>查看结构化值</summary>
+              <pre>{{ property.value }}</pre>
+            </details>
+            <span v-else>{{ property.value }}</span>
+          </div>
+        </div>
+        <div v-else class="feature-empty-properties">这个要素没有可显示的属性。</div>
+        <div class="feature-actions">
+          <Button type="button" variant="outline" size="sm" :disabled="workspace.featurePopup.value.coordinate === '坐标不可用'" @click="workspace.copyFeatureCoordinate"><ClipboardCopy :size="15" />复制坐标</Button>
+          <Button type="button" size="sm" :disabled="!workspace.featurePopup.value.extent" @click="workspace.zoomToFeature"><ZoomIn :size="15" />缩放到要素</Button>
+        </div>
+        <details class="feature-raw-details">
+          <summary>查看 GeoJSON</summary>
+          <pre class="feature-json">{{ workspace.featurePopup.value.geoJson }}</pre>
+        </details>
       </DialogContent>
     </Dialog>
 
@@ -114,6 +145,20 @@ function deleteViewedDrawing() {
 .map-notice { position:absolute; z-index:20; left:50%; bottom:104px; display:flex; align-items:center; gap:8px; max-width:calc(100vw - 40px); padding:10px 14px; border:1px solid rgba(255,255,255,.7); border-radius:11px; background:rgba(50, 50, 50,.92); color:white; box-shadow:0 10px 30px rgba(43, 43, 43,.22); font-size:12px; transform:translateX(-50%); }
 .loading-label { position:absolute; z-index:2; top:50%; left:50%; padding:12px 18px; border-radius:12px; background:rgba(255,255,255,.85); color:#5f5f5f; font-size:12px; transform:translate(-50%,-50%); }
 .feature-dialog { display:flex; flex-direction:column; max-height:min(80vh,680px); }
+.feature-properties { display:flex; flex-direction:column; max-height:42vh; overflow:auto; border:1px solid rgba(63,63,63,.12); border-radius:10px; background:rgba(255,255,255,.82); }
+.feature-property { display:grid; grid-template-columns:minmax(90px,.7fr) minmax(0,1.3fr); gap:12px; padding:9px 12px; border-bottom:1px solid rgba(63,63,63,.08); font-size:12px; line-height:1.45; }
+.feature-property:last-child { border-bottom:0; }
+.feature-property strong { overflow-wrap:anywhere; color:#777; font-size:11px; }
+.feature-property span { overflow-wrap:anywhere; color:#454545; white-space:pre-wrap; }
+.feature-property-complex { min-width:0; color:#626262; font-size:11px; }
+.feature-property-complex summary { cursor:pointer; }
+.feature-property-complex pre { max-height:180px; margin:7px 0 0; padding:9px; overflow:auto; border-radius:7px; background:#f5f7f5; color:#555; font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+.feature-actions { display:flex; justify-content:flex-end; gap:8px; }
+.feature-empty-properties { padding:14px; border:1px dashed rgba(63,63,63,.16); border-radius:10px; color:#888; font-size:12px; text-align:center; }
+.feature-raw-details { min-height:0; }
+.feature-raw-details summary { padding:7px 0; color:#747474; font-size:11px; cursor:pointer; }
+.feature-raw-details[open] { min-height:0; }
+.feature-raw-details .feature-json { max-height:28vh; }
 .feature-json { max-height:52vh; margin:0; padding:14px; overflow:auto; border:1px solid rgba(63, 63, 63,.12); border-radius:10px; background:rgba(246,250,246,.9); color:#4b4b4b; font: .75rem/1.6 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
 @media (max-width:700px) { .top-navigation { top:13px; left:13px; } .tool-position { top:84px; left:13px; } .inspector-position { top:auto; right:13px; bottom:56px; left:66px; width:auto; max-height:min(46vh,390px); } .map-notice { bottom:58px; } }
 </style>
