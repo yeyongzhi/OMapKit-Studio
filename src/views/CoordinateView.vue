@@ -21,12 +21,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import TopNavigation from '@/components/navigation/TopNavigation.vue'
 import CoordinateSystemPicker from '@/features/coordinate/CoordinateSystemPicker.vue'
+import ExcelBatchCoordinate from './ExcelBatchCoordinate.vue'
 import { transformCoordinate } from '@/features/coordinate/projection'
 
 type SourceMode = 'text' | 'table' | 'geojson'
 type FileFormat = 'csv' | 'excel' | 'geojson'
 type Matrix = unknown[][]
 
+const processingMode = ref<'single' | 'excel-batch'>('excel-batch')
 const sourceMode = ref<SourceMode>('text')
 const fileFormat = ref<FileFormat | null>(null)
 const sourceText = ref('120.1551, 30.2741\n120.1625, 30.2794')
@@ -367,7 +369,12 @@ function switchSourceMode(mode: SourceMode) {
   <main class="coordinate-page">
     <TopNavigation class="coordinate-navigation" />
 
-    <section class="workspace">
+    <div class="processing-shell">
+      <div class="processing-tabs" role="tablist" aria-label="坐标处理模式">
+        <button type="button" role="tab" :aria-selected="processingMode === 'single'" class="processing-tab" :class="{ active: processingMode === 'single' }" @click="processingMode = 'single'">单个坐标转换</button>
+        <button type="button" role="tab" :aria-selected="processingMode === 'excel-batch'" class="processing-tab" :class="{ active: processingMode === 'excel-batch' }" @click="processingMode = 'excel-batch'">Excel 批量转换</button>
+      </div>
+      <section v-if="processingMode === 'single'" class="workspace">
       <div class="workspace-grid">
         <Card class="panel input-panel">
           <CardHeader class="panel-header">
@@ -509,6 +516,8 @@ function switchSourceMode(mode: SourceMode) {
         </CardContent>
       </Card>
     </section>
+      <ExcelBatchCoordinate v-else />
+    </div>
   </main>
 </template>
 
@@ -520,7 +529,11 @@ function switchSourceMode(mode: SourceMode) {
   background: #f5f6f3;
 }
 .coordinate-navigation { position: fixed; top: 22px; left: 24px; z-index: 50; }
-.workspace { width: min(1440px, 100%); margin: 104px auto 0; }
+.processing-shell { width: min(1440px, 100%); margin: 104px auto 0; }
+.processing-tabs { display:flex; width:max-content; max-width:100%; align-items:center; gap:2px; margin-bottom:13px; padding:3px; border:1px solid #e2e5e0; border-radius:10px; background:rgba(255,255,255,.92); }
+.processing-tab { min-height:32px; padding:0 14px; border:0; border-radius:7px; background:transparent; color:#68716a; font-size:11px; cursor:pointer; }
+.processing-tab.active { background:#287bf5; color:white; font-weight:700; }
+.workspace { width: 100%; margin: 0 auto; }
 .workspace-grid { display: grid; grid-template-columns: minmax(290px, .96fr) minmax(270px, .82fr) minmax(340px, 1.15fr); gap: 14px; align-items: stretch; }
 .panel { min-width: 0; border-color: #e2e5e0; border-radius: 16px; background: rgba(255,255,255,.9); box-shadow: 0 8px 28px #1e2c2007; }
 .panel-header { display: flex; min-height: 76px; flex-direction: row; align-items: center; gap: 11px; padding: 16px 17px 12px; }
@@ -576,5 +589,5 @@ function switchSourceMode(mode: SourceMode) {
 .crs-note-content :deep([data-slot="badge"]) { white-space: nowrap; font-size: 10px; }
 .crs-note-content p { margin: 0; color: #838b85; font-size: 10px; line-height: 1.55; }
 @media (max-width: 1020px) { .workspace-grid { grid-template-columns: minmax(0, 1fr) minmax(260px, .8fr); } .output-panel { grid-column: 1 / -1; } .output-panel .output-content { min-height: 235px; } }
-@media (max-width: 680px) { .coordinate-page { padding-inline: 13px; } .coordinate-navigation { top: 14px; left: 13px; } .workspace { margin-top: 91px; } .workspace-grid { grid-template-columns: 1fr; gap: 11px; } .output-panel { grid-column: auto; } .crs-note-content { align-items: flex-start; flex-direction: column; gap: 7px; } .input-content, .settings-content, .output-content { padding-inline: 14px; } .panel-header { padding-inline: 14px; } }
+@media (max-width: 680px) { .coordinate-page { padding-inline: 13px; } .coordinate-navigation { top: 14px; left: 13px; } .processing-shell { margin-top: 91px; } .workspace-grid { grid-template-columns: 1fr; gap: 11px; } .output-panel { grid-column: auto; } .crs-note-content { align-items: flex-start; flex-direction: column; gap: 7px; } .input-content, .settings-content, .output-content { padding-inline: 14px; } .panel-header { padding-inline: 14px; } }
 </style>
