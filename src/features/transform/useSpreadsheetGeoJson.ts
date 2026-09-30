@@ -336,6 +336,28 @@ export function useSpreadsheetGeoJson() {
     await parseFile(source)
   }
 
+  function clear() {
+    file.value = null
+    workbook.value = null
+    fileName.value = ''
+    sheetNames.value = []
+    selectedSheet.value = ''
+    fileKind.value = ''
+    detectedEncoding.value = ''
+    headers.value = []
+    rows.value = []
+    selectedProperties.value = []
+    filters.value = []
+    longitudeField.value = ''
+    latitudeField.value = ''
+    startLongitudeField.value = ''
+    startLatitudeField.value = ''
+    endLongitudeField.value = ''
+    endLatitudeField.value = ''
+    error.value = ''
+    notice.value = ''
+  }
+
   async function reparseCsv() {
     if (file.value && fileKind.value === 'csv') await parseFile(file.value)
   }
@@ -418,7 +440,7 @@ export function useSpreadsheetGeoJson() {
     totalRows, filteredCount, validCount: computed(() => summary.value.validCount),
     skippedCount: computed(() => summary.value.skippedCount), previewJson, previewMessage, outputName,
     canExport, propertyKeyCollisions, reading, error, notice,
-    loadSheet, readFile, setGeometryKind, addFilter, removeFilter, setFilterField, toggleFilterValue,
+    loadSheet, readFile, clear, setGeometryKind, addFilter, removeFilter, setFilterField, toggleFilterValue,
     selectAllProperties, selectNoProperties, invertProperties, downloadGeoJson, makeGeoJsonText,
   }
 }

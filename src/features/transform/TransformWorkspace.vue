@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ShieldCheck } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { useMapWorkspaceStore } from '@/stores/mapWorkspace'
 import TopNavigation from '@/components/navigation/TopNavigation.vue'
-import SpreadsheetToGeoJsonPanel from '@/features/transform/SpreadsheetToGeoJsonPanel.vue'
+import SpreadsheetOptionsPanel from '@/features/transform/SpreadsheetOptionsPanel.vue'
+import SpreadsheetResultPanel from '@/features/transform/SpreadsheetResultPanel.vue'
 import TransformInputPanel from '@/features/transform/TransformInputPanel.vue'
 import TransformOptionsPanel from '@/features/transform/TransformOptionsPanel.vue'
 import TransformResultPanel from '@/features/transform/TransformResultPanel.vue'
 import { useDataTransform } from '@/features/transform/useDataTransform'
+import { useSpreadsheetGeoJson } from '@/features/transform/useSpreadsheetGeoJson'
 
-const mode = ref<'spreadsheet' | 'vector'>('spreadsheet')
+const spreadsheetMode = ref(false)
+const spreadsheet = useSpreadsheetGeoJson()
 const {
   sourceText, sourceFormat, targetFormat, sourceProjection, targetProjection, sourceCustomProjection, targetCustomProjection,
   fileName, sourceSize, canConvert, result, resultName, error, message,
@@ -20,6 +22,25 @@ const {
 } = useDataTransform()
 const router = useRouter()
 const mapStore = useMapWorkspaceStore()
+const inputFileName = computed(() => spreadsheetMode.value ? spreadsheet.fileName.value : fileName.value)
+const inputSize = computed(() => spreadsheetMode.value
+  ? `${spreadsheet.totalRows.value} 行 · ${spreadsheet.headers.value.length} 个字段`
+  : sourceSize.value)
+
+watch(spreadsheetMode, (enabled) => {
+  if (enabled) clearInput()
+  else spreadsheet.clear()
+})
+
+function readInputFile(file: File) {
+  if (spreadsheetMode.value) void spreadsheet.readFile(file)
+  else void readFile(file)
+}
+
+function clearAllInputs() {
+  clearInput()
+  spreadsheet.clear()
+}
 
 function loadResultToMap() {
   if (!result.value) return
@@ -33,13 +54,14 @@ function loadResultToMap() {
   void router.push('/map')
 }
 
-function loadSpreadsheetResultToMap(payload: { fileName: string; content: string }) {
+function loadSpreadsheetResultToMap() {
+  if (!spreadsheet.canExport.value) return
   mapStore.pendingMapImport = {
-    fileName: payload.fileName,
+    fileName: spreadsheet.outputName.value,
     format: 'GeoJSON',
     sourceProjection: 'EPSG:4326',
     sourceCustomProjection: '',
-    content: payload.content,
+    content: spreadsheet.makeGeoJsonText(),
   }
   void router.push('/map')
 }
@@ -54,39 +76,26 @@ function loadSpreadsheetResultToMap(payload: { fileName: string; content: string
         <Badge variant="outline">WGS 84 · GCJ-02 · BD-09 · CGCS2000 · 高斯-克吕格分带</Badge>
       </div>
 
-      <div class="mode-switch" role="tablist" aria-label="数据转换模式">
-        <Button
-          type="button"
-          role="tab"
-          :aria-selected="mode === 'spreadsheet'"
-          :variant="mode === 'spreadsheet' ? 'default' : 'outline'"
-          @click="mode = 'spreadsheet'"
-        >表格转 GeoJSON</Button>
-        <Button
-          type="button"
-          role="tab"
-          :aria-selected="mode === 'vector'"
-          :variant="mode === 'vector' ? 'default' : 'outline'"
-          @click="mode = 'vector'"
-        >空间格式与坐标转换</Button>
-      </div>
+      <div v-if="!spreadsheetMode && error" class="message error-message" role="alert">{{ error }}</div>
+      <div v-else-if="!spreadsheetMode && message" class="message success-message" role="status">{{ message }}</div>
 
-      <SpreadsheetToGeoJsonPanel v-if="mode === 'spreadsheet'" @load-to-map="loadSpreadsheetResultToMap" />
-
-      <template v-else>
-        <div v-if="error" class="message error-message" role="alert">{{ error }}</div>
-        <div v-else-if="message" class="message success-message" role="status">{{ message }}</div>
-
-        <div class="workspace-grid">
-          <TransformInputPanel
-            v-model:text="sourceText"
-            v-model:format="sourceFormat"
-            :file-name="fileName"
-            :source-size="sourceSize"
-            @file-selected="readFile"
-            @load-sample="loadSample"
-            @clear="clearInput"
-          />
+      <div class="workspace-grid">
+        <TransformInputPanel
+          v-model:text="sourceText"
+          v-model:format="sourceFormat"
+          v-model:spreadsheet-mode="spreadsheetMode"
+          :file-name="inputFileName"
+          :source-size="inputSize"
+          :spreadsheet="spreadsheet"
+          @file-selected="readInputFile"
+          @load-sample="loadSample"
+          @clear="clearAllInputs"
+        />
+        <template v-if="spreadsheetMode">
+          <SpreadsheetOptionsPanel :state="spreadsheet" />
+          <SpreadsheetResultPanel :state="spreadsheet" @load-to-map="loadSpreadsheetResultToMap" />
+        </template>
+        <template v-else>
           <TransformOptionsPanel
             v-model:target-format="targetFormat"
             v-model:source-projection="sourceProjection"
@@ -105,8 +114,8 @@ function loadSpreadsheetResultToMap(payload: { fileName: string; content: string
             @download="downloadResult"
             @load-to-map="loadResultToMap"
           />
-        </div>
-      </template>
+        </template>
+      </div>
 
       <footer class="page-footer"><span>© OMAPKIT STUDIO</span><span>由 openlayers-map-kit 提供格式与投影转换能力</span></footer>
     </div>
@@ -120,8 +129,6 @@ function loadSpreadsheetResultToMap(payload: { fileName: string; content: string
 .page-content { position:relative; z-index:1; width:min(1920px,100%); margin:0 auto; padding:112px 36px 24px; }
 .privacy-line { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:14px; }
 .privacy-line [data-slot="badge"] { gap:5px; color:#777777; background:#efefef; border-color:#e0e0e0; font-size:10px; }
-.mode-switch { display:flex; max-width:1180px; flex-wrap:wrap; gap:8px; margin:0 auto 16px; }
-.mode-switch [role="tab"] { min-height:36px; font-size:11px; }
 .message { margin-bottom:16px; padding:10px 14px; border:1px solid; border-radius:9px; font-size:12px; }
 .error-message { border-color:#e8cbc7; background:#fff5f3; color:#aa5446; }
 .success-message { border-color:#e0e0e0; background:#f6f6f6; color:#6f6f6f; }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import * as XLSX from 'xlsx'
 import {
   ArrowDownToLine,
@@ -21,14 +21,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import TopNavigation from '@/components/navigation/TopNavigation.vue'
 import CoordinateSystemPicker from '@/features/coordinate/CoordinateSystemPicker.vue'
-import ExcelBatchCoordinate from './ExcelBatchCoordinate.vue'
 import { transformCoordinate } from '@/features/coordinate/projection'
 
 type SourceMode = 'text' | 'table' | 'geojson'
 type FileFormat = 'csv' | 'excel' | 'geojson'
 type Matrix = unknown[][]
+interface FieldGroup { id: number; sourceX: string; sourceY: string; targetX: string; targetY: string }
 
-const processingMode = ref<'single' | 'excel-batch'>('excel-batch')
 const sourceMode = ref<SourceMode>('text')
 const fileFormat = ref<FileFormat | null>(null)
 const sourceText = ref('120.1551, 30.2741\n120.1625, 30.2794')
@@ -39,11 +38,9 @@ const convertedMatrix = ref<Matrix>([])
 const geoJsonValue = ref<Record<string, unknown> | null>(null)
 const convertedGeoJson = ref<Record<string, unknown> | null>(null)
 const workbook = ref<XLSX.WorkBook | null>(null)
+const fileBuffer = ref<ArrayBuffer | null>(null)
 const worksheet = ref('')
-const sourceXField = ref('')
-const sourceYField = ref('')
-const outputXField = ref('longitude_out')
-const outputYField = ref('latitude_out')
+const fieldGroups = ref<FieldGroup[]>([])
 const inputCrs = ref('EPSG:4326')
 const outputCrs = ref('GCJ-02')
 const customInputCrs = ref('')
@@ -53,9 +50,17 @@ const successMessage = ref('')
 const outputBlob = ref<Blob | null>(null)
 const outputFilename = ref('')
 const filePickerKey = ref(0)
+const previewPage = ref(1)
+const previewPageSize = 50
+let nextFieldGroupId = 1
 
 const headers = computed(() => fileMatrix.value[0]?.map((value, index) => String(value ?? '').trim() || `字段 ${index + 1}`) ?? [])
+const fieldOptions = computed(() => (fileMatrix.value[0] ?? []).map((value, index) => ({ value: String(index), label: String(value ?? '').trim() || `字段 ${index + 1}` })))
 const previewMatrix = computed(() => convertedMatrix.value.length ? convertedMatrix.value : fileMatrix.value)
+const previewRows = computed(() => previewMatrix.value.slice(1))
+const previewPageCount = computed(() => Math.max(1, Math.ceil(previewRows.value.length / previewPageSize)))
+const currentPreviewRows = computed(() => previewRows.value.slice((previewPage.value - 1) * previewPageSize, previewPage.value * previewPageSize))
+const previewStartIndex = computed(() => (previewPage.value - 1) * previewPageSize)
 const isTabular = computed(() => fileFormat.value === 'csv' || fileFormat.value === 'excel')
 const fileDescription = computed(() => {
   if (!inputFile.value) return sourceMode.value === 'table'
@@ -66,6 +71,32 @@ const fileDescription = computed(() => {
     : `${Math.max(0, fileMatrix.value.length - 1)} 行数据 · ${headers.value.length} 个字段`
   return `${inputFile.value.name} · ${details}`
 })
+
+function guessFieldIndex(kind: 'x' | 'y') {
+  const pattern = kind === 'x' ? /^(x|lon|lng|longitude|经度|x84|xgcj02|xbd09)$/i : /^(y|lat|latitude|纬度|y84|ygcj02|ybd09)$/i
+  const match = fieldOptions.value.find((field) => pattern.test(field.label.replace(/[\s_-]+/g, '')))
+  return match?.value ?? fieldOptions.value[kind === 'x' ? 0 : 1]?.value ?? fieldOptions.value[0]?.value ?? ''
+}
+
+function outputSuffix() {
+  return outputCrs.value === 'GCJ-02' ? 'gcj02'
+    : outputCrs.value === 'BD-09' ? 'bd09'
+      : outputCrs.value === 'EPSG:4326' ? 'wgs84'
+        : outputCrs.value === 'EPSG:4490' ? 'cgcs2000'
+          : outputCrs.value.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'converted'
+}
+
+function createFieldGroup(index: number): FieldGroup {
+  const tail = index > 1 ? `_${index}` : ''
+  return { id: nextFieldGroupId++, sourceX: guessFieldIndex('x'), sourceY: guessFieldIndex('y'), targetX: `x_${outputSuffix()}${tail}`, targetY: `y_${outputSuffix()}${tail}` }
+}
+
+function resetFieldGroups() {
+  fieldGroups.value = fileMatrix.value.length ? [createFieldGroup(1)] : []
+  previewPage.value = 1
+}
+
+watch([inputCrs, outputCrs, customInputCrs, customOutputCrs, fieldGroups], resetOutput, { deep: true })
 
 function parseCsv(source: string): string[][] {
   const rows: string[][] = []
@@ -139,7 +170,12 @@ async function onFilePicked(event: Event) {
   if (!file) return
   errorMessage.value = ''
   resetOutput()
+  fileFormat.value = null
   inputFile.value = file
+  fileMatrix.value = []
+  fieldGroups.value = []
+  fileBuffer.value = null
+  workbook.value = null
   const extension = file.name.split('.').pop()?.toLowerCase()
   try {
     if (sourceMode.value === 'table' && extension === 'csv') {
@@ -147,11 +183,11 @@ async function onFilePicked(event: Event) {
       const rows = parseCsv((await file.text()).replace(/^\uFEFF/, ''))
       if (!rows.length || rows.length < 2) throw new Error('表格需要包含表头和至少一行坐标数据。')
       fileMatrix.value = rows
-      sourceXField.value = headers.value[0]
-      sourceYField.value = headers.value[1] ?? headers.value[0]
+      resetFieldGroups()
     } else if (sourceMode.value === 'table' && (extension === 'xlsx' || extension === 'xls')) {
       fileFormat.value = 'excel'
       const data = await file.arrayBuffer()
+      fileBuffer.value = data
       const loadedWorkbook = XLSX.read(data, { type: 'array' })
       if (!loadedWorkbook.SheetNames.length) throw new Error('Excel 文件中没有可读取的工作表。')
       workbook.value = loadedWorkbook
@@ -165,13 +201,14 @@ async function onFilePicked(event: Event) {
     } else {
       throw new Error(sourceMode.value === 'table' ? '请选择 CSV、XLSX 或 XLS 表格文件。' : '请选择 GeoJSON 文件。')
     }
-    successMessage.value = sourceMode.value === 'table'
-      ? '文件已读取，请确认坐标字段后开始转换。'
+      successMessage.value = sourceMode.value === 'table'
+      ? `文件已读取，${fieldGroups.value.length} 个字段组已就绪，请设置转换字段。`
       : `已识别为 ${geoJsonValue.value?.type ?? 'GeoJSON'}，确认坐标系后即可转换。`
   } catch (error) {
     fileFormat.value = null
     fileMatrix.value = []
     geoJsonValue.value = null
+    fieldGroups.value = []
     errorMessage.value = error instanceof Error ? error.message : '读取文件时发生错误。'
   }
 }
@@ -182,13 +219,31 @@ function loadWorksheet(name: string) {
   const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: '' })
   if (!rows.length || rows.length < 2) throw new Error('所选工作表需要包含表头和至少一行坐标数据。')
   fileMatrix.value = rows
-  sourceXField.value = headers.value[0]
-  sourceYField.value = headers.value[1] ?? headers.value[0]
+  worksheet.value = name
+  resetFieldGroups()
   resetOutput()
 }
 
 function formatNumber(value: number): string {
   return Number(value.toFixed(8)).toString()
+}
+
+function parseCoordinate(value: unknown) {
+  if (value === null || value === undefined || typeof value === 'boolean') return null
+  const text = String(value).trim()
+  if (!text) return null
+  const coordinate = Number(text.replace(/,/g, ''))
+  return Number.isFinite(coordinate) ? coordinate : null
+}
+
+function addFieldGroup() {
+  fieldGroups.value.push(createFieldGroup(fieldGroups.value.length + 1))
+  resetOutput()
+}
+
+function removeFieldGroup(id: number) {
+  fieldGroups.value = fieldGroups.value.filter((group) => group.id !== id)
+  resetOutput()
 }
 
 function transformText() {
@@ -212,47 +267,74 @@ function transformText() {
 
 function transformTable() {
   if (!fileMatrix.value.length) throw new Error('请先读取 CSV 或 Excel 文件。')
-  const xIndex = headers.value.indexOf(sourceXField.value)
-  const yIndex = headers.value.indexOf(sourceYField.value)
-  if (xIndex < 0 || yIndex < 0) throw new Error('请选择有效的 X、Y 坐标字段。')
-  const xName = outputXField.value.trim()
-  const yName = outputYField.value.trim()
-  if (!xName || !yName) throw new Error('请填写转换结果的 X、Y 输出字段名。')
-  if (xName === yName) throw new Error('X、Y 输出字段不能同名。')
+  if (!fieldGroups.value.length) throw new Error('请至少添加一个坐标字段组。')
 
   const rows = fileMatrix.value.map((row) => [...row])
-  const outputHeaders = headers.value
+  const outputHeaders = rows[0]
+  const targets = new Set<string>()
   const findOrAdd = (name: string) => {
-    const existing = outputHeaders.indexOf(name)
+    const existing = outputHeaders.findIndex((value) => String(value ?? '').trim().toLocaleLowerCase() === name.toLocaleLowerCase())
     if (existing >= 0) return existing
     outputHeaders.push(name)
-    rows[0].push(name)
+    for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) rows[rowIndex][outputHeaders.length - 1] = ''
     return outputHeaders.length - 1
   }
-  const outXIndex = findOrAdd(xName)
-  const outYIndex = findOrAdd(yName)
+  const outputColumns = fieldGroups.value.map((group, index) => {
+    const sourceX = Number(group.sourceX)
+    const sourceY = Number(group.sourceY)
+    if (!Number.isInteger(sourceX) || !Number.isInteger(sourceY) || sourceX < 0 || sourceY < 0 || sourceX >= headers.value.length || sourceY >= headers.value.length) {
+      throw new Error(`字段组 ${index + 1} 请选择有效的 X、Y 源字段。`)
+    }
+    if (sourceX === sourceY) throw new Error(`字段组 ${index + 1} 的 X、Y 源字段不能相同。`)
+    const targetXName = group.targetX.trim()
+    const targetYName = group.targetY.trim()
+    if (!targetXName || !targetYName) throw new Error(`字段组 ${index + 1} 请填写 X、Y 输出字段名。`)
+    if (targetXName.toLocaleLowerCase() === targetYName.toLocaleLowerCase()) throw new Error(`字段组 ${index + 1} 的 X、Y 输出字段不能同名。`)
+    for (const name of [targetXName, targetYName]) {
+      const key = name.toLocaleLowerCase()
+      if (targets.has(key)) throw new Error('多个字段组使用了相同的输出字段名，请分别设置输出字段。')
+      targets.add(key)
+    }
+    return { sourceX, sourceY, targetX: findOrAdd(targetXName), targetY: findOrAdd(targetYName), targetXName, targetYName }
+  })
+  let validPairs = 0
+  let skippedPairs = 0
   for (let index = 1; index < rows.length; index += 1) {
+    const sourceRow = fileMatrix.value[index]
     const row = rows[index]
     while (row.length < outputHeaders.length) row.push('')
-    if (String(row[xIndex] ?? '').trim() === '' && String(row[yIndex] ?? '').trim() === '') continue
-    const x = Number(row[xIndex])
-    const y = Number(row[yIndex])
-    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`第 ${index + 1} 行字段“${sourceXField.value} / ${sourceYField.value}”不是有效数字。`)
-    const [outX, outY] = transformCoordinate(x, y, inputCrs.value, outputCrs.value, customInputCrs.value, customOutputCrs.value)
-    row[outXIndex] = formatNumber(outX)
-    row[outYIndex] = formatNumber(outY)
+    for (const columns of outputColumns) {
+      row[columns.targetX] = ''
+      row[columns.targetY] = ''
+      const x = parseCoordinate(sourceRow[columns.sourceX])
+      const y = parseCoordinate(sourceRow[columns.sourceY])
+      if (x === null || y === null) {
+        skippedPairs += 1
+        continue
+      }
+      const [outX, outY] = transformCoordinate(x, y, inputCrs.value, outputCrs.value, customInputCrs.value, customOutputCrs.value)
+      if (!Number.isFinite(outX) || !Number.isFinite(outY)) {
+        skippedPairs += 1
+        continue
+      }
+      row[columns.targetX] = formatNumber(outX)
+      row[columns.targetY] = formatNumber(outY)
+      validPairs += 1
+    }
   }
   convertedMatrix.value = rows
+  previewPage.value = 1
   if (fileFormat.value === 'csv') {
     outputBlob.value = new Blob([`\uFEFF${csvStringify(rows)}`], { type: 'text/csv;charset=utf-8' })
     outputFilename.value = `${inputFile.value?.name.replace(/\.[^.]+$/, '') || 'coordinates'}-converted.csv`
-  } else if (fileFormat.value === 'excel' && workbook.value) {
-    workbook.value.Sheets[worksheet.value] = XLSX.utils.aoa_to_sheet(rows)
-    const data = XLSX.write(workbook.value, { bookType: 'xlsx', type: 'array' })
+  } else if (fileFormat.value === 'excel' && fileBuffer.value && worksheet.value) {
+    const outputWorkbook = XLSX.read(fileBuffer.value, { type: 'array' })
+    outputWorkbook.Sheets[worksheet.value] = XLSX.utils.aoa_to_sheet(rows)
+    const data = XLSX.write(outputWorkbook, { bookType: 'xlsx', type: 'array' })
     outputBlob.value = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     outputFilename.value = `${inputFile.value?.name.replace(/\.[^.]+$/, '') || 'coordinates'}-converted.xlsx`
   }
-  successMessage.value = `坐标转换完成，结果写入字段“${xName}”和“${yName}”。`
+  successMessage.value = `坐标转换完成：有效 ${validPairs} 组，跳过无效或空坐标 ${skippedPairs} 组。`
 }
 
 function transformPositions(value: unknown): unknown {
@@ -344,7 +426,10 @@ function clearInput() {
   geoJsonValue.value = null
   convertedGeoJson.value = null
   workbook.value = null
+  fileBuffer.value = null
   worksheet.value = ''
+  fieldGroups.value = []
+  previewPage.value = 1
   resetOutput()
   errorMessage.value = ''
   successMessage.value = ''
@@ -370,11 +455,6 @@ function switchSourceMode(mode: SourceMode) {
     <TopNavigation class="coordinate-navigation" />
 
     <div class="processing-shell">
-      <div class="processing-tabs" role="tablist" aria-label="坐标处理模式">
-        <button type="button" role="tab" :aria-selected="processingMode === 'single'" class="processing-tab" :class="{ active: processingMode === 'single' }" @click="processingMode = 'single'">单个坐标转换</button>
-        <button type="button" role="tab" :aria-selected="processingMode === 'excel-batch'" class="processing-tab" :class="{ active: processingMode === 'excel-batch' }" @click="processingMode = 'excel-batch'">Excel 批量转换</button>
-      </div>
-      <section v-if="processingMode === 'single'" class="workspace">
       <div class="workspace-grid">
         <Card class="panel input-panel">
           <CardHeader class="panel-header">
@@ -424,34 +504,40 @@ function switchSourceMode(mode: SourceMode) {
             <div class="panel-step">02</div>
             <div class="panel-heading-copy">
               <CardTitle>转换设置</CardTitle>
-              <CardDescription>选择坐标字段与转换方向</CardDescription>
+            <CardDescription>配置字段组与坐标转换方向</CardDescription>
             </div>
           </CardHeader>
           <CardContent class="settings-content">
-            <div v-if="sourceMode === 'table' && isTabular" class="field-pair">
-              <div class="form-field">
-                <Label for="x-field">X / 经度字段</Label>
-                <Select v-model="sourceXField">
-                  <SelectTrigger id="x-field"><SelectValue placeholder="选择 X 字段" /></SelectTrigger>
-                  <SelectContent><SelectItem v-for="field in headers" :key="`x-${field}`" :value="field">{{ field }}</SelectItem></SelectContent>
-                </Select>
+            <div v-if="sourceMode === 'table' && isTabular" class="field-groups">
+              <div v-for="(group, groupIndex) in fieldGroups" :key="group.id" class="coordinate-group">
+                <div class="coordinate-group-heading"><strong>字段组 {{ groupIndex + 1 }}</strong><Button type="button" variant="ghost" size="sm" :disabled="fieldGroups.length === 1" :aria-label="'删除字段组 ' + (groupIndex + 1)" @click="removeFieldGroup(group.id)">移除</Button></div>
+                <div class="field-pair">
+                  <div class="form-field">
+                    <Label :for="'source-x-' + group.id">经度源字段</Label>
+                    <Select :model-value="group.sourceX" @update:model-value="group.sourceX = String($event); resetOutput()">
+                      <SelectTrigger :id="'source-x-' + group.id"><SelectValue placeholder="选择 X 字段" /></SelectTrigger>
+                      <SelectContent><SelectItem v-for="field in fieldOptions" :key="'x-' + field.value" :value="field.value">{{ field.label }}</SelectItem></SelectContent>
+                    </Select>
+                  </div>
+                  <div class="form-field">
+                    <Label :for="'target-x-' + group.id">经度目标字段名</Label>
+                    <Input :id="'target-x-' + group.id" v-model="group.targetX" placeholder="例如 x_gcj02" />
+                  </div>
+                  <div class="form-field">
+                    <Label :for="'source-y-' + group.id">纬度源字段</Label>
+                    <Select :model-value="group.sourceY" @update:model-value="group.sourceY = String($event); resetOutput()">
+                      <SelectTrigger :id="'source-y-' + group.id"><SelectValue placeholder="选择 Y 字段" /></SelectTrigger>
+                      <SelectContent><SelectItem v-for="field in fieldOptions" :key="'y-' + field.value" :value="field.value">{{ field.label }}</SelectItem></SelectContent>
+                    </Select>
+                  </div>
+                  <div class="form-field">
+                    <Label :for="'target-y-' + group.id">纬度目标字段名</Label>
+                    <Input :id="'target-y-' + group.id" v-model="group.targetY" placeholder="例如 y_gcj02" />
+                  </div>
+                </div>
               </div>
-              <div class="form-field">
-                <Label for="y-field">Y / 纬度字段</Label>
-                <Select v-model="sourceYField">
-                  <SelectTrigger id="y-field"><SelectValue placeholder="选择 Y 字段" /></SelectTrigger>
-                  <SelectContent><SelectItem v-for="field in headers" :key="`y-${field}`" :value="field">{{ field }}</SelectItem></SelectContent>
-                </Select>
-              </div>
-              <div class="form-field">
-                <Label for="out-x-field">输出 X 字段</Label>
-                <Input id="out-x-field" v-model="outputXField" placeholder="例如 longitude_out" />
-              </div>
-              <div class="form-field">
-                <Label for="out-y-field">输出 Y 字段</Label>
-                <Input id="out-y-field" v-model="outputYField" placeholder="例如 latitude_out" />
-              </div>
-              <div class="field-note field-note-wide">输出字段已存在时会覆盖该列；否则会新增两列，其他字段保持不变。</div>
+              <Button type="button" variant="outline" size="sm" class="add-field-group" @click="addFieldGroup"><FileSpreadsheet :size="14" />添加字段组</Button>
+              <div class="field-note">输出字段已存在时会覆盖该列，否则会追加到表格末尾；多个字段组共用上方坐标系设置。</div>
             </div>
 
             <div class="crs-pair">
@@ -471,7 +557,7 @@ function switchSourceMode(mode: SourceMode) {
             <div class="panel-step">03</div>
             <div class="panel-heading-copy">
               <CardTitle>转换结果</CardTitle>
-              <CardDescription>{{ sourceMode === 'text' ? '查看并复制输出文本' : '预览并下载转换文件' }}</CardDescription>
+          <CardDescription>{{ sourceMode === 'text' ? '查看并复制输出文本' : '分页预览并下载转换文件' }}</CardDescription>
             </div>
             <Button v-if="sourceMode !== 'text' && outputBlob" variant="outline" size="sm" @click="downloadResult"><ArrowDownToLine :size="14" />下载</Button>
           </CardHeader>
@@ -489,16 +575,21 @@ function switchSourceMode(mode: SourceMode) {
               <Textarea :model-value="convertedGeoJson ? JSON.stringify(convertedGeoJson, null, 2) : JSON.stringify(geoJsonValue, null, 2)" readonly class="geojson-preview" />
             </template>
             <template v-else-if="isTabular && fileMatrix.length">
-              <div class="table-summary"><Badge variant="secondary">{{ Math.max(0, previewMatrix.length - 1) }} 行数据</Badge><span>展示前 5 行预览</span></div>
+              <div class="table-summary"><Badge variant="secondary">{{ previewRows.length }} 行数据</Badge><span>第 {{ previewPage }} / {{ previewPageCount }} 页 · 每页 {{ previewPageSize }} 行</span></div>
               <div class="table-scroll">
                 <Table>
-                  <TableHeader><TableRow><TableHead v-for="field in previewMatrix[0]?.slice(0, 6)" :key="String(field)">{{ field }}</TableHead></TableRow></TableHeader>
+                  <TableHeader><TableRow><TableHead v-for="(field, fieldIndex) in previewMatrix[0]" :key="'field-' + fieldIndex">{{ field }}</TableHead></TableRow></TableHeader>
                   <TableBody>
-                    <TableRow v-for="(row, rowIndex) in previewMatrix.slice(1, 6)" :key="`row-${rowIndex}`">
-                      <TableCell v-for="(value, cellIndex) in row.slice(0, 6)" :key="`cell-${rowIndex}-${cellIndex}`">{{ value }}</TableCell>
+                    <TableRow v-for="(row, rowIndex) in currentPreviewRows" :key="`row-${previewStartIndex + rowIndex}`">
+                      <TableCell v-for="(value, cellIndex) in row" :key="`cell-${rowIndex}-${cellIndex}`">{{ value }}</TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>
+              </div>
+              <div v-if="previewPageCount > 1" class="preview-pagination">
+                <Button type="button" variant="outline" size="sm" :disabled="previewPage <= 1" @click="previewPage -= 1">上一页</Button>
+                <span>{{ previewPage }} / {{ previewPageCount }}</span>
+                <Button type="button" variant="outline" size="sm" :disabled="previewPage >= previewPageCount" @click="previewPage += 1">下一页</Button>
               </div>
             </template>
             <div v-else class="empty-result"><ScanLine :size="24" /><span>选择输入并开始转换，结果会显示在这里</span></div>
@@ -515,8 +606,6 @@ function switchSourceMode(mode: SourceMode) {
           <p>GCJ-02 与 BD-09 使用 coordtransform 转换；其他坐标系由 proj4 处理。可输入 EPSG 编号（内置含 WGS 84 UTM、NAD83 UTM、ETRS89 UTM 等）或自定义 PROJ 字符串。部分基准转换受本地网格数据精度限制。</p>
         </CardContent>
       </Card>
-    </section>
-      <ExcelBatchCoordinate v-else />
     </div>
   </main>
 </template>
@@ -530,10 +619,6 @@ function switchSourceMode(mode: SourceMode) {
 }
 .coordinate-navigation { position: fixed; top: 22px; left: 24px; z-index: 50; }
 .processing-shell { width: min(1440px, 100%); margin: 104px auto 0; }
-.processing-tabs { display:flex; width:max-content; max-width:100%; align-items:center; gap:2px; margin-bottom:13px; padding:3px; border:1px solid #e2e5e0; border-radius:10px; background:rgba(255,255,255,.92); }
-.processing-tab { min-height:32px; padding:0 14px; border:0; border-radius:7px; background:transparent; color:#68716a; font-size:11px; cursor:pointer; }
-.processing-tab.active { background:#287bf5; color:white; font-weight:700; }
-.workspace { width: 100%; margin: 0 auto; }
 .workspace-grid { display: grid; grid-template-columns: minmax(290px, .96fr) minmax(270px, .82fr) minmax(340px, 1.15fr); gap: 14px; align-items: stretch; }
 .panel { min-width: 0; border-color: #e2e5e0; border-radius: 16px; background: rgba(255,255,255,.9); box-shadow: 0 8px 28px #1e2c2007; }
 .panel-header { display: flex; min-height: 76px; flex-direction: row; align-items: center; gap: 11px; padding: 16px 17px 12px; }
@@ -557,7 +642,14 @@ function switchSourceMode(mode: SourceMode) {
 .mode-switch { display: flex; flex: 0 0 auto; gap: 1px; padding: 3px; border: 1px solid #e8eae7; border-radius: 9px; background: #f7f8f6; }
 .mode-switch :deep(button) { height: 27px; padding-inline: 7px; font-size: 10px; }
 .mode-switch :deep(button[data-variant="ghost"]) { color: #707771; }
+.field-groups { display:flex; flex-direction:column; gap:9px; }
+.coordinate-group { overflow:hidden; border:1px solid #e5e8e4; border-radius:9px; }
+.coordinate-group-heading { display:flex; min-height:33px; align-items:center; justify-content:space-between; padding:3px 9px; border-bottom:1px solid #eceeeb; background:#f7f8f6; }
+.coordinate-group-heading strong { color:#747b75; font-size:10px; }
+.coordinate-group-heading :deep(button) { height:25px; padding:0 6px; color:#8c918d; font-size:9px; }
 .field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding-bottom: 11px; border-bottom: 1px solid #eceeeb; }
+.coordinate-group .field-pair { padding:9px; border:0; }
+.add-field-group { align-self:flex-start; height:30px; gap:6px; border-style:dashed; color:#6f786f; font-size:10px; }
 .form-field { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
 .form-field :deep([data-slot="select-trigger"]) { width: 100%; height: 34px; padding-inline: 9px; font-size: 11px; }
 .form-field :deep(input) { height: 34px; font-size: 11px; }
@@ -580,6 +672,8 @@ function switchSourceMode(mode: SourceMode) {
 .table-scroll :deep(table) { min-width: 460px; font-size: 10px; }
 .table-scroll :deep(th) { height: 32px; background: #f7f8f6; font-weight: 700; }
 .table-scroll :deep(td) { height: 32px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview-pagination { display:flex; align-items:center; justify-content:center; gap:10px; color:#858d87; font-size:10px; }
+.preview-pagination :deep(button) { height:28px; font-size:10px; }
 .empty-result { display: flex; min-height: 250px; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed #e2e5e0; border-radius: 12px; color: #a0a7a1; font-size: 11px; text-align: center; }
 .feedback { padding: 9px 10px; border-radius: 8px; font-size: 10px; line-height: 1.5; }
 .error-feedback { border: 1px solid #f2d1d1; background: #fff5f5; color: #9e3636; }
