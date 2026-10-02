@@ -1,12 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, shallowRef } from 'vue'
-import { AlertCircle, ClipboardCopy, ZoomIn } from '@lucide/vue'
+import { computed, onMounted, shallowRef, watch } from 'vue'
+import { ClipboardCopy, ZoomIn } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import { Empty, EmptyDescription } from '@/components/ui/empty'
+import { Table, TableBody, TableCell, TableRow } from '@/components/ui/table'
+import { Toaster } from '@/components/ui/sonner'
+import { toast } from 'vue-sonner'
+import { Card } from '@/components/ui/card'
 import TopNavigation from '@/components/navigation/TopNavigation.vue'
 import MapToolRail from './MapToolRail.vue'
 import MapInspector from './MapInspector.vue'
 import MapBottomBar from './MapBottomBar.vue'
+import MapToolsPanel from './MapToolsPanel.vue'
 import { useMapWorkspace } from './useMapWorkspace'
 
 const workspaceElement = shallowRef<HTMLElement | null>(null)
@@ -17,6 +24,11 @@ onMounted(() => {
   mapElement.value = workspace?.querySelector<HTMLDivElement>('[data-map-canvas]') ?? null
 })
 const workspace = useMapWorkspace(mapElement)
+watch(workspace.notice, value => { if (value) toast(value) })
+const toolsMode = computed(() => {
+  const tool = workspace.store.activeTool
+  return tool === 'select' || tool === 'edit' || tool === 'heatmap' || tool === 'groups' || tool === 'services' ? tool : null
+})
 const featureDialogOpen = computed({
   get: () => workspace.featurePopup.value !== null,
   set: (open: boolean) => { if (!open) workspace.featurePopup.value = null },
@@ -30,7 +42,7 @@ function handleFullscreen() {
 
 <template>
   <main data-map-workspace class="map-workspace">
-    <div data-map-canvas class="map-canvas" aria-label="杭州高德地图" />
+    <div data-map-canvas class="map-canvas" aria-label="地图工作区" />
     <div class="map-tone" aria-hidden="true" />
 
     <TopNavigation class="top-navigation" />
@@ -38,7 +50,7 @@ function handleFullscreen() {
     <MapToolRail class="tool-position" :active-tool="workspace.store.activeTool" @select="workspace.selectTool" />
 
     <MapInspector
-      v-show="workspace.store.panelOpen"
+      v-show="workspace.store.panelOpen && !toolsMode"
       class="inspector-position"
       :active-tool="workspace.store.activeTool"
       :drawing-mode="workspace.store.drawingMode"
@@ -55,7 +67,9 @@ function handleFullscreen() {
       :layers="workspace.layerItems.value"
       :import-busy="workspace.importBusy.value"
       :import-reports="workspace.importReports.value"
+      :basemap="workspace.store.baseStyle"
       @close="workspace.store.panelOpen = false"
+      @set-basemap="workspace.setBasemap"
       @select-drawing-mode="workspace.selectDrawingMode"
       @select-measuring-mode="workspace.selectMeasuringMode"
       @set-layer-visible="workspace.setLayerVisible"
@@ -84,6 +98,16 @@ function handleFullscreen() {
       @cancel-map-pick="workspace.cancelAnnotationPick"
     />
 
+    <MapToolsPanel
+      v-if="toolsMode && workspace.store.panelOpen"
+      class="inspector-position tools-position"
+      :tools="workspace.tools"
+      :mode="toolsMode"
+      :ready="workspace.ready.value"
+      @select-tool="workspace.selectTool"
+      @close="workspace.store.panelOpen = false"
+    />
+
     <MapBottomBar
       class="bottom-position"
       :panel-open="workspace.store.panelOpen"
@@ -107,30 +131,20 @@ function handleFullscreen() {
           <DialogTitle>{{ workspace.featurePopup.value.geometryType }}</DialogTitle>
           <DialogDescription>{{ workspace.featurePopup.value.layerName }} · {{ workspace.featurePopup.value.coordinate }} · EPSG:4326</DialogDescription>
         </DialogHeader>
-        <div v-if="workspace.featurePopup.value.properties.length" class="feature-properties">
-          <div v-for="property in workspace.featurePopup.value.properties" :key="property.name" class="feature-property">
-            <strong>{{ property.name }}</strong>
-            <details v-if="property.isComplex" class="feature-property-complex">
-              <summary>查看结构化值</summary>
-              <pre>{{ property.value }}</pre>
-            </details>
-            <span v-else>{{ property.value }}</span>
-          </div>
+        <div class="max-h-[40vh] overflow-auto">
+          <Table v-if="workspace.featurePopup.value.properties.length"><TableBody><TableRow v-for="property in workspace.featurePopup.value.properties" :key="property.name"><TableCell class="align-top text-muted-foreground">{{ property.name }}</TableCell><TableCell class="max-w-72 whitespace-pre-wrap break-words">{{ property.value }}</TableCell></TableRow></TableBody></Table>
+          <Empty v-else class="border p-4"><EmptyDescription>这个要素没有可显示的属性。</EmptyDescription></Empty>
         </div>
-        <div v-else class="feature-empty-properties">这个要素没有可显示的属性。</div>
         <div class="feature-actions">
           <Button type="button" variant="outline" size="sm" :disabled="workspace.featurePopup.value.coordinate === '坐标不可用'" @click="workspace.copyFeatureCoordinate"><ClipboardCopy :size="15" />复制坐标</Button>
           <Button type="button" size="sm" :disabled="!workspace.featurePopup.value.extent" @click="workspace.zoomToFeature"><ZoomIn :size="15" />缩放到要素</Button>
         </div>
-        <details class="feature-raw-details">
-          <summary>查看 GeoJSON</summary>
-          <pre class="feature-json">{{ workspace.featurePopup.value.geoJson }}</pre>
-        </details>
+        <Accordion type="single" collapsible><AccordionItem value="geojson"><AccordionTrigger>查看 GeoJSON</AccordionTrigger><AccordionContent><pre class="feature-json">{{ workspace.featurePopup.value.geoJson }}</pre></AccordionContent></AccordionItem></Accordion>
       </DialogContent>
     </Dialog>
 
-    <div v-if="workspace.notice.value" class="map-notice" role="status"><AlertCircle :size="17" />{{ workspace.notice.value }}</div>
-    <div v-if="!workspace.ready.value" class="loading-label">正在加载地图工作区…</div>
+    <Toaster position="bottom-center" :offset="80" />
+    <Card v-if="!workspace.ready.value" class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 p-4 text-sm" role="status">正在加载地图工作区…</Card>
   </main>
 </template>
 
@@ -140,7 +154,8 @@ function handleFullscreen() {
 .map-tone { position:absolute; inset:0; z-index:1; pointer-events:none; background:linear-gradient(90deg,rgba(48, 48, 48,.055),transparent 29%),linear-gradient(0deg,rgba(43, 43, 43,.08),transparent 25%); }
 .top-navigation { position:absolute; z-index:10; left:24px; top:24px; }
 .tool-position { position:absolute; z-index:9; top:106px; left:24px; }
-.inspector-position { position:absolute; z-index:8; right:24px; top:24px; bottom:76px; width:300px; }
+.inspector-position { position:absolute; z-index:8; right:24px; top:24px; bottom:76px; width:360px; }
+.tools-position { width:380px; }
 .bottom-position { position:absolute; z-index:10; left:0; right:0; bottom:0; }
 .map-notice { position:absolute; z-index:20; left:50%; bottom:104px; display:flex; align-items:center; gap:8px; max-width:calc(100vw - 40px); padding:10px 14px; border:1px solid rgba(255,255,255,.7); border-radius:11px; background:rgba(50, 50, 50,.92); color:white; box-shadow:0 10px 30px rgba(43, 43, 43,.22); font-size:12px; transform:translateX(-50%); }
 .loading-label { position:absolute; z-index:2; top:50%; left:50%; padding:12px 18px; border-radius:12px; background:rgba(255,255,255,.85); color:#5f5f5f; font-size:12px; transform:translate(-50%,-50%); }

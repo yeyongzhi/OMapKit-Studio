@@ -19,6 +19,7 @@ import { useMapWorkspaceStore } from '@/stores/mapWorkspace'
 import type { DrawingMode, ImportFormat, ImportProjection, ImportedLayerData, MapAnnotation, MapAnnotationDraft, MapTool, MeasuringMode, PendingMapImport, SavedMapView } from '@/stores/mapWorkspace'
 import { convertData } from '@/features/transform/convertData'
 import { captureMap } from './captureMap'
+import { useMapTools } from './useMapTools'
 
 export type DrawingItem = {
   id: string
@@ -183,10 +184,41 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
   let drawEndTimeout: number | undefined
   let clickListener: ReturnType<KitMap['on']> | undefined
 
+  const tools = useMapTools({
+    map: () => map,
+    vectors: () => [drawingsLayer, ...importedRuntimeLayers.value.map(entry => entry.layer)].filter((layer): layer is VectorLayer => layer !== null),
+    sync: (layer) => {
+      if (layer === drawingsLayer) saveDrawings()
+      const entry = importedRuntimeLayers.value.find(entry => entry.layer === layer)
+      if (entry) {
+        entry.data.geoJson = formatGeoJson().writeFeatures(layer.getFeatures(), { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' })
+        persistImportedLayers()
+      }
+      featurePopup.value = null
+      refreshLayerItems()
+    },
+    notice: showNotice,
+    preferences: (layer, visible, opacity) => {
+      setLayerVisible(String(layer.getId()), visible)
+      setLayerOpacity(String(layer.getId()), opacity)
+    },
+  })
+
   function showNotice(message: string) {
     notice.value = message
     window.clearTimeout(noticeTimeout)
     noticeTimeout = window.setTimeout(() => { notice.value = '' }, 5000)
+  }
+
+  function setBasemap(style: 'vec' | 'img') {
+    if (!map || !baseLayer || store.baseStyle === style) return
+    const replacement = new GaodeLayer(style === 'img' ? GaodeLayerType.Img : GaodeLayerType.Vec, {
+      id: 'gaode-base', name: style === 'img' ? '高德卫星影像' : '高德街道底图',
+      preload: 0, useInterimTilesOnError: true, cacheSize: 512,
+      visible: store.baseVisible, opacity: store.baseOpacity, source: { crossOrigin: 'anonymous' },
+    })
+    map.removeLayer(baseLayer); baseLayer.dispose(); baseLayer = replacement
+    map.addLayer(baseLayer); store.baseStyle = style; refreshLayerItems()
   }
 
   function saveViewport() {
@@ -274,7 +306,7 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
         id: 'gaode-base',
         name: baseLayer.getName(),
         kind: 'basemap',
-        subtitle: '底图 · 高德矢量',
+        subtitle: store.baseStyle === 'img' ? '底图 · 卫星影像' : '底图 · 街道',
         visible: baseLayer.getVisible(),
         opacity: baseLayer.getOpacity(),
         canRename: false,
@@ -471,6 +503,7 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
 
   function startDrawing(mode: DrawingMode) {
     if (!map || !drawingsLayer) return
+    tools.stop()
     stopMeasuring()
     drawingsLayer.setVisible(true)
     store.drawingsVisible = true
@@ -507,6 +540,7 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
 
   function startMeasuring(mode: MeasuringMode) {
     if (!map) return
+    tools.stop()
     stopDrawing()
     if (measure && measureMode !== mode) stopMeasuring(true)
     if (!measure) {
@@ -524,6 +558,8 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
   }
 
   function selectTool(tool: MapTool) {
+    tools.stop()
+    tools.state.error = ''
     store.activeTool = tool
     store.panelOpen = true
     annotationPickMode.value = false
@@ -533,9 +569,12 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
       stopDrawing()
       stopMeasuring()
     }
+    tools.refreshTargets()
+    if (tool === 'select' || tool === 'edit') tools.activate(tool)
   }
 
   function startAnnotationPick() {
+    tools.stop()
     if (!map || !annotationsLayer) {
       showNotice('地图尚未准备好，请稍后再选点。')
       return
@@ -693,6 +732,7 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
   }
 
   function setLayerVisible(id: string, visible: boolean) {
+    if (tools.changeGroupChild(id, { visible })) return
     const layer = id === 'gaode-base' ? baseLayer : getManagedVectorLayer(id)
     if (!layer) return
     layer.setVisible(visible)
@@ -709,6 +749,7 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
 
   function setLayerOpacity(id: string, opacity: number) {
     const value = Math.min(1, Math.max(0, opacity))
+    if (tools.changeGroupChild(id, { opacity: value })) return
     const layer = id === 'gaode-base' ? baseLayer : getManagedVectorLayer(id)
     if (!layer) return
     layer.setOpacity(value)
@@ -729,6 +770,8 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
     const layer = getManagedVectorLayer(id)
     if (!layer) return
     layer.setName(trimmedName)
+    const child = tools.state.children.find(child => child.id === id)
+    if (child) child.name = trimmedName
     if (id === 'drawings') store.drawingsName = trimmedName
     else if (id === 'annotations') store.annotationsName = trimmedName
     else {
@@ -754,6 +797,7 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
   function removeLayer(id: string) {
     const entry = importedRuntimeLayers.value.find((item) => item.data.id === id)
     if (!entry || !map) return
+    tools.beforeRemoveLayer(id)
     map.removeLayer(entry.layer)
     entry.layer.dispose()
     importedRuntimeLayers.value = importedRuntimeLayers.value.filter((item) => item.data.id !== id)
@@ -762,6 +806,7 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
     if (featurePopup.value?.layerId === id) featurePopup.value = null
     applyLayerOrder()
     refreshLayerItems()
+    tools.refreshTargets()
     showNotice(`图层“${entry.data.name}”已移除。`)
   }
 
@@ -861,7 +906,12 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
     }
 
     importBusy.value = false
-    if (lastImportedId) zoomToLayer(lastImportedId)
+    if (lastImportedId) {
+      tools.state.targetId = lastImportedId
+      tools.refreshTargets()
+      if (store.activeTool === 'select' || store.activeTool === 'edit') tools.activate(store.activeTool)
+      zoomToLayer(lastImportedId)
+    }
     if (failures.length) {
       showNotice(`${importedCount ? `成功导入 ${importedCount} 个文件、${importedFeatureCount} 个要素；` : ''}${failures.slice(0, 2).join('；')}`)
     } else if (importedCount) {
@@ -1014,9 +1064,9 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
           zoom: store.zoom,
         },
       })
-      baseLayer = new GaodeLayer(GaodeLayerType.Vec, {
+      baseLayer = new GaodeLayer(store.baseStyle === 'img' ? GaodeLayerType.Img : GaodeLayerType.Vec, {
         id: 'gaode-base',
-        name: '高德矢量底图',
+        name: store.baseStyle === 'img' ? '高德卫星影像' : '高德街道底图',
         preload: 0,
         useInterimTilesOnError: true,
         cacheSize: 512,
@@ -1049,6 +1099,7 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
       map.on('map:moveend', saveViewport)
       clickListener = map.on('map:singleclick', (event) => {
         if (!event.pixel || !map) return
+        if (store.activeTool === 'select' || store.activeTool === 'edit') return
         if (annotationPickMode.value && store.activeTool === 'annotations') {
           if (!event.coordinate) {
             showNotice('无法读取所选位置，请在地图上再选一次。')
@@ -1083,6 +1134,8 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
       if (store.activeTool === 'measure') startMeasuring(store.measuringMode)
       document.addEventListener('fullscreenchange', syncFullscreen)
       ready.value = true
+      tools.refreshTargets()
+      if (store.activeTool === 'select' || store.activeTool === 'edit') tools.activate(store.activeTool)
       const pendingImport = store.pendingMapImport
       if (pendingImport) {
         store.pendingMapImport = null
@@ -1096,6 +1149,7 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
   })
 
   onBeforeUnmount(() => {
+    tools.dispose()
     window.clearTimeout(noticeTimeout)
     window.clearTimeout(drawEndTimeout)
     document.removeEventListener('fullscreenchange', syncFullscreen)
@@ -1112,6 +1166,7 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
   })
 
   return {
+    tools,
     store,
     ready,
     notice,
@@ -1164,5 +1219,6 @@ export function useMapWorkspace(element: Readonly<ShallowRef<HTMLElement | null>
     locate,
     screenshot,
     toggleFullscreen,
+    setBasemap,
   }
 }

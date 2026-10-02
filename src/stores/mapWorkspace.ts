@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { shallowRef } from 'vue'
 
-export type MapTool = 'layers' | 'import' | 'draw' | 'measure' | 'annotations'
+export type MapTool = 'layers' | 'import' | 'draw' | 'measure' | 'annotations' | 'select' | 'edit' | 'heatmap' | 'groups' | 'services'
 export type DrawingMode = 'Point' | 'LineString' | 'Polygon'
 export type MeasuringMode = 'Distance' | 'Area'
 export type ImportFormat = 'GeoJSON' | 'KML' | 'WKT'
@@ -51,6 +51,7 @@ export const useMapWorkspaceStore = defineStore('map-workspace', () => {
   const drawingMode = shallowRef<DrawingMode>('Point')
   const measuringMode = shallowRef<MeasuringMode>('Distance')
   const panelOpen = shallowRef(true)
+  const baseStyle = shallowRef<'vec' | 'img'>('vec')
   const baseVisible = shallowRef(true)
   const drawingsVisible = shallowRef(true)
   const baseOpacity = shallowRef(1)
@@ -73,6 +74,7 @@ export const useMapWorkspaceStore = defineStore('map-workspace', () => {
     drawingMode,
     measuringMode,
     panelOpen,
+    baseStyle,
     baseVisible,
     drawingsVisible,
     baseOpacity,

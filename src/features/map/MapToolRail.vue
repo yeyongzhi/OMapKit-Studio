@@ -1,46 +1,32 @@
 <script setup lang="ts">
-import { FileUp, Layers3, MapPin, PencilLine, Ruler } from '@lucide/vue'
-import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
+import { FileUp, Layers3, MapPin, PencilLine, Ruler, MousePointer2, SquarePen, Flame, FolderTree, Globe } from '@lucide/vue'
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import type { MapTool } from '@/stores/mapWorkspace'
-
 defineProps<{ activeTool: MapTool }>()
 const emit = defineEmits<{ select: [tool: MapTool] }>()
-
 const tools = [
-  { id: 'layers', label: '图层', icon: Layers3 },
-  { id: 'import', label: '导入', icon: FileUp },
-  { id: 'draw', label: '绘制', icon: PencilLine },
-  { id: 'annotations', label: '标注', icon: MapPin },
-  { id: 'measure', label: '测量', icon: Ruler },
+  { id: 'layers', label: '图层', icon: Layers3 }, { id: 'import', label: '导入', icon: FileUp },
+  { id: 'draw', label: '绘制', icon: PencilLine }, { id: 'annotations', label: '标注', icon: MapPin },
+  { id: 'measure', label: '测量', icon: Ruler }, { id: 'select', label: '属性', icon: MousePointer2 },
+  { id: 'edit', label: '编辑', icon: SquarePen }, { id: 'heatmap', label: '热力', icon: Flame },
+  { id: 'groups', label: '分组', icon: FolderTree }, { id: 'services', label: '服务', icon: Globe },
 ] as const
+function select(value: unknown) { if (tools.some(tool => tool.id === value)) emit('select', value as MapTool) }
 </script>
-
 <template>
-  <Card class="tool-rail" aria-label="地图工具">
-    <Button
-      v-for="tool in tools"
-      :key="tool.id"
-      type="button"
-      variant="ghost"
-      class="tool-button"
-      :class="{ active: activeTool === tool.id }"
-      :aria-label="tool.label"
-      :aria-pressed="activeTool === tool.id"
-      :title="tool.label"
-      @click="emit('select', tool.id)"
-    >
-      <component :is="tool.icon" :size="19" :stroke-width="1.9" />
-      <span>{{ tool.label }}</span>
-    </Button>
+  <Card class="gap-0 py-0 shadow-lg" aria-label="地图工具">
+    <CardHeader class="sr-only"><CardTitle>地图工具</CardTitle></CardHeader>
+    <CardContent class="max-h-[calc(100svh-180px)] overflow-y-auto p-1.5">
+      <TooltipProvider>
+        <ToggleGroup type="single" :model-value="activeTool" orientation="vertical" class="flex-col gap-1" @update:model-value="select">
+          <Tooltip v-for="tool in tools" :key="tool.id">
+            <TooltipTrigger as-child><ToggleGroupItem :value="tool.id" :aria-label="tool.label" class="h-12 w-11 shrink-0 flex-col gap-1"><component :is="tool.icon" /><span class="text-[10px]">{{ tool.label }}</span></ToggleGroupItem></TooltipTrigger>
+            <TooltipContent side="right">{{ tool.label }}</TooltipContent>
+          </Tooltip>
+        </ToggleGroup>
+      </TooltipProvider>
+    </CardContent>
   </Card>
 </template>
-
-<style scoped>
-.tool-rail { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid rgba(255,255,255,.76); border-radius: 15px; background: rgba(250,250,248,.86); box-shadow: 0 16px 46px rgba(40, 40, 40,.17); backdrop-filter: blur(22px) saturate(1.4); -webkit-backdrop-filter: blur(22px) saturate(1.4); }
-.tool-button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 47px; height: 50px; border: 0; border-radius: 10px; background: transparent; color: #606060; cursor: pointer; font-size: 9px; font-weight: 700; transition: background .18s, color .18s; }
-.tool-button:hover { background: var(--accent); color: var(--accent-foreground); }
-.tool-button.active { background: var(--primary); color: var(--primary-foreground); box-shadow: 0 5px 14px rgba(0,0,0,.16); }
-.tool-button:focus-visible { outline: 2px solid #6a6a6a; outline-offset: 2px; }
-@media (max-width: 640px) { .tool-rail { padding: 5px; } .tool-button { width: 43px; height: 46px; gap: 2px; font-size: 9px; } }
-</style>
